@@ -143,7 +143,7 @@ public class IOTest {
         Map<String, String> parameters = new HashMap<>();
         parameters.put("instrument_name", "BTC_USDT");
 
-        HttpClient.getTrades(vertx, apiInfo, 80, "get", null, parameters, null)
+        HttpClient.getTrades(vertx, apiInfo, parameters)
                 .onFailure(ar -> {
                     log.error("get error", ar);
                     latch.countDown();

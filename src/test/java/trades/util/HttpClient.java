@@ -97,14 +97,14 @@ public class HttpClient {
         return promise.future();
     }
 
-    public static Future<JsonObject> getTrades(Vertx vertx, Map<String, JsonObject> apiInfo, Integer port, String method, Map<String, String> header, Map<String, String> parameters, Buffer body) {
+    public static Future<JsonObject> getTrades(Vertx vertx, Map<String, JsonObject> apiInfo, Map<String, String> parameters) {
         Promise<JsonObject> promise = Promise.promise();
 
         JsonObject api = apiInfo.get("getTrades");
         String domain = api.getString("domain");
         String path = api.getString("path");
 
-        getResponse(vertx, domain, path, port, method, header, parameters, body)
+        getResponse(vertx, domain, path, 80, "get", null, parameters, null)
                 .onFailure(promise::fail)
                 .onSuccess(res -> {
                     int statusCode = res.statusCode();
@@ -117,5 +117,4 @@ public class HttpClient {
 
         return promise.future();
     }
-
 }
