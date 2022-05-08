@@ -3,7 +3,7 @@
     {
       "name": "getCandleStick",
       "method": "get",
-      "domain": "uat-api.3ona.co",
+      "domain": "api.crypto.com",
       "path": "/v2/public/get-candlestick",
       "parameter": [
         {
@@ -15,7 +15,7 @@
         },
         {
           "name": "timeframe",
-          "values": [
+          "value": [
             "1m",
             "5m",
             "15m",
@@ -35,7 +35,7 @@
     {
       "name": "getTrades",
       "method": "get",
-      "domain": "uat-api.3ona.co",
+      "domain": "api.crypto.com",
       "path": "/v2/public/get-trades",
       "parameter": [
         {
