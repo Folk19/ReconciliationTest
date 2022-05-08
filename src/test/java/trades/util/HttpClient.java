@@ -73,14 +73,13 @@ public class HttpClient {
     }
 
     public static Future<JsonObject> getCandleStick(Vertx vertx, Map<String, JsonObject> apiInfo, Map<String, String> parameters) {
-        log.info("Query CandleStick API");
-
         Promise<JsonObject> promise = Promise.promise();
 
         JsonObject api = apiInfo.get("getCandleStick");
         String domain = api.getString("domain");
         String path = api.getString("path");
 
+        log.info("Query CandleStick API with domain: " + domain +", path: "+ path);
         getResponse(vertx, domain, path, 80, "get", null, parameters, null)
                 .onFailure(promise::fail)
                 .onSuccess(res -> {
@@ -104,6 +103,7 @@ public class HttpClient {
         String domain = api.getString("domain");
         String path = api.getString("path");
 
+        log.info("Query Trades API domain: " + domain +", path: "+ path);
         getResponse(vertx, domain, path, 80, "get", null, parameters, null)
                 .onFailure(promise::fail)
                 .onSuccess(res -> {
