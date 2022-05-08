@@ -25,5 +25,5 @@
    * Verify O == the first trade
    * Verify C == the last trade
    * Verify H == the highest price
-   * Verify H == the lowest price
+   * Verify L == the lowest price
 2. other setup ...
