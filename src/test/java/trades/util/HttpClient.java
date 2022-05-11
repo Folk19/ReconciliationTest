@@ -91,10 +91,8 @@ public class HttpClient {
                 .onSuccess(res -> {
                     int statusCode = res.statusCode();
                     if (statusCode != 200) {
-                        log.error("Query CandleStick API: fail");
                         promise.fail("http status is not 200: " + statusCode + ", errorMsg: " + res.bodyAsString());
                     } else {
-                        log.info("Query CandleStick API: success");
                         promise.complete(res.bodyAsJsonObject());
                     }
                 });

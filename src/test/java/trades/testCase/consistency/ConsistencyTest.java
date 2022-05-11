@@ -1,15 +1,16 @@
 package trades.testCase.consistency;
 
-import io.vertx.core.CompositeFuture;
-import io.vertx.core.Vertx;
+import io.vertx.core.*;
 import io.vertx.core.impl.logging.Logger;
 import io.vertx.core.impl.logging.LoggerFactory;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
-import org.joda.time.DateTime;
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.params.*;
+import org.junit.jupiter.params.provider.ValueSource;
 import trades.util.HttpClient;
 
+import java.io.IOException;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.Period;
@@ -19,6 +20,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static trades.util.Config.loadConfig;
@@ -26,27 +28,14 @@ import static trades.util.Config.loadConfig;
 public class ConsistencyTest {
     private final static Logger log = LoggerFactory.getLogger(ConsistencyTest.class);
 
-    private static final Map<String, Long> periodMap = new HashMap<>();
-
     public static Vertx vertx;
     public static Map<String, JsonObject> apiInfo;
-
-    private static Long parse(String feString) {
-        if (Character.isUpperCase(feString.charAt(feString.length() - 1))) {
-            LocalDateTime start = LocalDateTime.now();
-            Period period = Period.parse("P" + feString);
-            LocalDateTime end = start.plus(period);
-            return start.until(end, ChronoUnit.MILLIS);
-        } else {
-            return Duration.parse("PT" + feString).toMillis();
-        }
-    }
 
     @BeforeAll
     static void setup() {
         log.info("@BeforeAll - executes once before all test methods in this class");
 
-        vertx = Vertx.vertx();
+        vertx = Vertx.vertx(new VertxOptions().setWorkerPoolSize(10));
 
         //Read config file and parse API info into map
         JsonObject config = loadConfig("config.json");
@@ -59,30 +48,6 @@ public class ConsistencyTest {
                 }
             }
         }
-
-        JsonObject api = apiInfo.get("getCandleStick");
-        JsonArray params = api.getJsonArray("parameter");
-        for (Object obj : params) {
-            JsonObject param = (JsonObject) obj;
-            String name = param.getString("name", null);
-            if (Objects.nonNull(name) && name.equals("timeframe")) {
-                JsonArray values = param.getJsonArray("value");
-                for (Object value : values) {
-                    periodMap.put((String) value, parse((String) value));
-                }
-                break;
-            }
-        }
-    }
-
-    @BeforeEach
-    void init() {
-        log.info("@BeforeEach - executes before each test method in this class");
-    }
-
-    @AfterEach
-    void tearDown() {
-        log.info("@AfterEach - executed after each test method.");
     }
 
     @AfterAll
@@ -91,115 +56,293 @@ public class ConsistencyTest {
         vertx.close();
     }
 
-    private boolean consistencyChecker(JsonObject candles, JsonObject trades, Map<String, String> parameters) {
-        String instrument = parameters.get("instrument_name");
-        String period = parameters.get("timeframe");
-        Long periodMillis = periodMap.get(period);
+    @BeforeEach
+    void init() {
+        log.info("@BeforeEach - executes before each test method in this class");
+        log.info("============================================================");
+    }
 
-        JsonArray tradesResult = trades.getJsonObject("result", new JsonObject()).getJsonArray("data");
-        JsonObject candlesResult = candles.getJsonObject("result");
-        if (!instrument.equals(candlesResult.getString("instrument_name"))) {
-            log.error("Instrument doesn't match.");
+    @AfterEach
+    void tearDown() {
+        log.info("============================================================");
+        log.info("@AfterEach - executed after each test method.");
+    }
+
+    private static Long parse(String feString) {
+        if (Character.isUpperCase(feString.charAt(feString.length() - 1))) {
+            LocalDateTime start = LocalDateTime.now();
+            Period period = Period.parse("P" + feString);
+            LocalDateTime end = start.plus(period);
+            return start.until(end, ChronoUnit.MILLIS);
+        } else {
+            return Duration.parse("PT" + feString).toMillis();
+        }
+    }
+
+    private boolean consistencyChecker(String instrument, String period, JsonArray candles, JsonArray trades) {
+
+        log.info("Run consistency Checker: " + instrument + "(" + period + ")");
+
+        boolean isPass = true;
+        // input check
+        if (Objects.isNull(instrument) || Objects.isNull(period) || Objects.isNull(candles) || Objects.isNull(trades)) {
+            log.error("Incomplete parameter, instrument: " + instrument + ", period: " + period
+                            + ", candles: " + (candles == null ? null : candles.encode())
+                            + ", trades: " + (trades == null ? null : trades.encode())
+                    , new IOException());
             return false;
         }
 
-        if (!period.equals(candlesResult.getString("interval"))) {
-            log.error("Timeframe doesn't match.");
-            return false;
-        }
+        //translate period from string to millisecond
+        Long periodMillis = parse(period);
 
-        JsonObject candle, trade;
-        Long begin, end, timestamp;
-        Double open, close, high, low, price;
-        String iName;
-        JsonArray data = candlesResult.getJsonArray("data");
-        for (Object cObj : data) {
+        // copy trans to List for sorting by timestamp
+        List<JsonObject> tradesList = new ArrayList<>();
+        for (int i = 0; i < trades.size(); i++) tradesList.add(trades.getJsonObject(i));
+        tradesList.sort((a, b) -> {
+            Long tA = a.getLong("t");
+            Long tB = b.getLong("t");
+            return tA.compareTo(tB);
+        });
+
+        JsonObject candle;
+        long begin, end, timestamp;
+        Double candleOpen, candleClose, candleHigh, candleLow, candleVolume;
+        Double tradeOpen, tradeClose, tradeHigh, tradeLow, tradeVolume;
+        Double tradePrice, tradeQuantity;
+        boolean isCandlePass;
+        String logInfo;
+        for (Object cObj : candles) {
+            // get candle info
             candle = (JsonObject) cObj;
-            end = candle.getLong("t");
-            begin = end - periodMillis;
-            log.debug("Time period: " + begin + " - " + end);
+
+            // get period
+            begin = candle.getLong("t");
+            end = begin + periodMillis;
+            logInfo = "Case (" + begin + "-" + end + ")";
+
+            //get other info
+            candleOpen = candle.getDouble("o");
+            candleClose = candle.getDouble("c");
+            candleHigh = candle.getDouble("h");
+            candleLow = candle.getDouble("l");
+            candleVolume = candle.getDouble("v");
+
+            isCandlePass = true;
 
             // init O,C,H,L for this period
-            open = null;
-            close = null;
-            high = Double.MIN_VALUE;
-            low = Double.MAX_VALUE;
+            tradeOpen = null;
+            tradeClose = null;
+            tradeHigh = Double.MIN_VALUE;
+            tradeLow = Double.MAX_VALUE;
+            tradeVolume = 0.0;
 
             // iterator to get the trade between in the time period
-            for (Object tObj : tradesResult) {
-                trade = (JsonObject) tObj;
+            for (JsonObject trade : tradesList) {
                 timestamp = trade.getLong("t");
-                iName = trade.getString("i");
-                price = trade.getDouble("p");
+                tradePrice = trade.getDouble("p");
+                tradeQuantity = trade.getDouble("q");
 
-
-                if (timestamp > begin && timestamp <= end && instrument.equals(iName)) {
-                    log.debug("Timestamp: " + timestamp);
+                if (timestamp > begin && timestamp <= end) {
                     // this trade is in the period, set O,C,H,L
-                    if (Objects.isNull(open)) open = price;
-                    close = price;
-                    high = Math.max(high, price);
-                    low = Math.min(low, price);
+                    if (Objects.isNull(tradeOpen)) tradeOpen = tradePrice;
+                    tradeClose = tradePrice;
+                    tradeHigh = Math.max(tradeHigh, tradePrice);
+                    tradeLow = Math.min(tradeLow, tradePrice);
+                    tradeVolume += tradeQuantity;
                 }
             }
 
-            // Verify O,C,H,L with candle data
-            if (Objects.isNull(open)) {
-                log.debug("No timestamp in the period: " + begin + " - " + end);
-                continue;
+            // Verify O,C,H,L,V with candle data
+            if (!tradeVolume.equals(candleVolume)) {
+                log.error(logInfo + ": volume doesn't match: " + tradeVolume + " (expected: " + candleVolume + ")");
+                isCandlePass = false;
+            } else {
+                StringJoiner misMatch = new StringJoiner(", ");
+                if (!Objects.equals(tradeOpen, candleOpen)) {
+                    misMatch.add("open doesn't match: " + tradeOpen + " (expected: " + candleOpen + ")");
+                    isCandlePass = false;
+                }
+                if (!Objects.equals(tradeClose, candleClose)) {
+                    misMatch.add("close doesn't match: " + tradeClose + " (expected: " + candleClose + ")");
+                    isCandlePass = false;
+                }
+                if (!tradeHigh.equals(candleHigh)) {
+                    misMatch.add("high doesn't match: " + tradeHigh + " (expected: " + candleHigh + ")");
+                    isCandlePass = false;
+                }
+                if (!tradeLow.equals(candleLow)) {
+                    misMatch.add("low doesn't match: " + tradeLow + " (expected: " + candleLow + ")");
+                    isCandlePass = false;
+                }
+                if (misMatch.length() > 0) {
+                    log.error(logInfo + ": " + misMatch);
+                }
             }
 
-            if (Objects.isNull(open) || !open.equals(candle.getDouble("o"))) {
-                log.debug("open doesn't match: " + open);
-                return false;
-            }
-            if (!close.equals(candle.getDouble("c"))) {
-                log.debug("close doesn't match: " + close);
-                return false;
-            }
-            if (!high.equals(candle.getDouble("h"))) {
-                log.debug("high doesn't match: " + high);
-                return false;
-            }
-            if (!low.equals(candle.getDouble("l"))) {
-                log.debug("low doesn't match: " + low);
-                return false;
+            if (isCandlePass) {
+                log.info(logInfo + ": PASS");
+            } else {
+                isPass = false;
             }
         }
 
-        return true;
+        return isPass;
     }
 
-    @Test
-    public void testConsistency1m() throws TimeoutException, InterruptedException {
+    private Future<Void> consistencyTest(String instrument, String period) {
+        Promise<Void> promise = Promise.promise();
+
+        log.info("Start Consistency Test: " + instrument + "(" + period + ")");
+
+        Map<String, String> parameters = new HashMap<>();
+        parameters.put("instrument_name", instrument);
+        parameters.put("timeframe", period);
+
+        //loop to call trade api to get complete trade data
+        Promise<Void> tradeFuture = Promise.promise();
+        Map<Long, JsonObject> tradesMap = new HashMap<>(); //store trade data in map to avoid duplication
+        AtomicInteger counter = new AtomicInteger(0);
+        long rounds = Math.min(parse(period) / 2000, 3);
+
+        //set timer, run every 1 sec, call trade api
+        vertx.setPeriodic(2000, timeID ->
+                HttpClient.getTrades(vertx, apiInfo, parameters)
+                        .onFailure(trades -> {
+                            log.error("Get trade api error(" + counter + "/" + rounds + ")", trades);
+                            tradeFuture.fail(trades);
+                            vertx.cancelTimer(timeID);
+                        })
+                        .onSuccess(trades -> {
+                            JsonArray data = trades
+                                    .getJsonObject("result", new JsonObject())
+                                    .getJsonArray("data", new JsonArray());
+
+                            for (Object obj : data) {
+                                JsonObject trade = (JsonObject) obj;
+                                Long id = trade.getLong("d");
+                                if (!tradesMap.containsKey(id)) tradesMap.put(id, trade);
+                            }
+
+                            if (counter.addAndGet(1) >= rounds) {
+                                tradeFuture.complete();
+                                vertx.cancelTimer(timeID);
+                            }
+                        })
+        );
+
+        //after all trade api response
+        tradeFuture.future()
+                .compose(tradesAr -> HttpClient.getCandleStick(vertx, apiInfo, parameters)) //get candlestick data
+                .onFailure(promise::fail)
+                .onSuccess(candlesAr -> {
+                    //copy trades from map into json array
+                    JsonArray trades = new JsonArray();
+                    for (Map.Entry<Long, JsonObject> entry : tradesMap.entrySet()) trades.add(entry.getValue());
+
+                    //parse candlestick response to get "data"
+                    JsonArray candles = candlesAr.getJsonObject("result", new JsonObject()).getJsonArray("data", new JsonArray());
+
+                    log.info("Trades response: " + trades.encode());
+                    log.info("Candles response: " + candles.encode());
+
+                    //run consistency checker to map candlesticks and trades
+                    if (consistencyChecker(instrument, period, candles, trades))
+                        promise.complete(); //consistency test PASS
+                    else
+                        promise.fail("consistency checker FAIL"); //consistency test FAIL
+                });
+
+        return promise.future();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"1m", "5m", "15m", "30m", "1h", "4h", "6h", "12h", "1D", "7D", "14D", "1M"})
+    public void LUNA_USDTConsistencyTest(String period) throws TimeoutException, InterruptedException {
         AtomicBoolean result = new AtomicBoolean(false);
         CountDownLatch latch = new CountDownLatch(1);
 
-        Map<String, String> parameters = new HashMap<>();
-        parameters.put("instrument_name", "BTC_USDT");
-        parameters.put("timeframe", "1m");
-
-        CompositeFuture.join(HttpClient.getCandleStick(vertx, apiInfo, parameters), HttpClient.getTrades(vertx, apiInfo, parameters))
+        String instrument = "LUNA_USDT";
+        consistencyTest(instrument, period)
                 .onFailure(ar -> {
-                    log.error("get error", ar);
+                    log.info(instrument + "(" + period + ")" + " consistency test: FAIL", ar);
                     latch.countDown();
                 })
                 .onSuccess(ar -> {
-                    JsonObject candleStickRes = ar.resultAt(0);
-                    JsonObject tradesRes = ar.resultAt(1);
-                    if (consistencyChecker(candleStickRes, tradesRes, parameters)) {
-                        log.info("success, candleStick: " + candleStickRes.encode() + ", trades: " + tradesRes.encode());
-                        result.compareAndSet(false, true);
-                    } else {
-                        log.info("fail, candleStick: " + candleStickRes.encode() + ", trades: " + tradesRes.encode());
-                    }
+                    log.info(instrument + "(" + period + ")" + " consistency test: PASS");
+                    result.compareAndSet(false, true);
                     latch.countDown();
                 });
 
-        if (latch.await(60, TimeUnit.SECONDS)) {
+        //set testcase timeout 10min
+        if (latch.await(600, TimeUnit.SECONDS)) {
+            log.info("End Consistency Test: " + instrument + "(" + period + ")");
             assertTrue(result.get());
         } else {
-            throw new TimeoutException("Request timeout by fetching event data");
+            String errMsg = instrument + " consistency test: fail due to timeout exception.";
+            log.error(errMsg);
+            log.info("End Consistency Test: " + instrument + "(" + period + ")");
+            throw new TimeoutException(errMsg);
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"1m", "5m", "15m", "30m", "1h", "4h", "6h", "12h", "1D", "7D", "14D", "1M"})
+    public void ETH_CROConsistencyTest(String period) throws TimeoutException, InterruptedException {
+        AtomicBoolean result = new AtomicBoolean(false);
+        CountDownLatch latch = new CountDownLatch(1);
+
+        String instrument = "ETH_CRO";
+        consistencyTest(instrument, period)
+                .onFailure(ar -> {
+                    log.info(instrument + "(" + period + ")" + " consistency test: FAIL", ar);
+                    latch.countDown();
+                })
+                .onSuccess(ar -> {
+                    log.info(instrument + "(" + period + ")" + " consistency test: PASS");
+                    result.compareAndSet(false, true);
+                    latch.countDown();
+                });
+
+        //set testcase timeout 10min
+        if (latch.await(600, TimeUnit.SECONDS)) {
+            log.info("End Consistency Test: " + instrument + "(" + period + ")");
+            assertTrue(result.get());
+        } else {
+            String errMsg = instrument + " consistency test: fail due to timeout exception.";
+            log.error(errMsg);
+            log.info("End Consistency Test: " + instrument + "(" + period + ")");
+            throw new TimeoutException(errMsg);
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"1m", "5m", "15m", "30m", "1h", "4h", "6h", "12h", "1D", "7D", "14D", "1M"})
+    public void BTC_USDTConsistencyTest(String period) throws TimeoutException, InterruptedException {
+        AtomicBoolean result = new AtomicBoolean(false);
+        CountDownLatch latch = new CountDownLatch(1);
+
+        String instrument = "BTC_USDT";
+        consistencyTest(instrument, period)
+                .onFailure(ar -> {
+                    log.info(instrument + "(" + period + ")" + " consistency test: FAIL", ar);
+                    latch.countDown();
+                })
+                .onSuccess(ar -> {
+                    log.info(instrument + "(" + period + ")" + " consistency test: PASS");
+                    result.compareAndSet(false, true);
+                    latch.countDown();
+                });
+
+        //set testcase timeout 10min
+        if (latch.await(600, TimeUnit.SECONDS)) {
+            log.info("End Consistency Test: " + instrument + "(" + period + ")");
+            assertTrue(result.get());
+        } else {
+            String errMsg = instrument + " consistency test: fail due to timeout exception.";
+            log.error(errMsg);
+            log.info("End Consistency Test: " + instrument + "(" + period + ")");
+            throw new TimeoutException(errMsg);
         }
     }
 }
