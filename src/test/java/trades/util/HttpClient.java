@@ -13,6 +13,7 @@ import io.vertx.ext.web.client.WebClient;
 
 import java.util.Map;
 import java.util.Objects;
+import java.util.StringJoiner;
 
 public class HttpClient {
     private final static Logger log = LoggerFactory.getLogger(HttpClient.class);
@@ -26,14 +27,14 @@ public class HttpClient {
             WebClient client = WebClient.create(vertx);
             HttpRequest<Buffer> req;
 
-            switch (method.toLowerCase()) {
-                case "get":
+            switch (method.toUpperCase()) {
+                case "GET":
                     req = client.get(port, domain, path);
                     break;
-                case "put":
+                case "PUT":
                     req = client.put(port, domain, path);
                     break;
-                case "post":
+                case "POST":
                     req = client.post(port, domain, path);
                     break;
                 default:
@@ -79,7 +80,12 @@ public class HttpClient {
         String domain = api.getString("domain");
         String path = api.getString("path");
 
-        log.info("Query CandleStick API with domain: " + domain +", path: "+ path);
+        StringJoiner joiner = new StringJoiner(", ");
+        for (Map.Entry<String, String> entry : parameters.entrySet()) {
+            joiner.add("\"" + entry.getKey() + "\"" + ": " + "\"" + entry.getValue() + "\"");
+        }
+
+        log.info("Query CandleStick API with domain: " + domain + ", path: " + path + ", parameters: {" + joiner + "}");
         getResponse(vertx, domain, path, 80, "get", null, parameters, null)
                 .onFailure(promise::fail)
                 .onSuccess(res -> {
@@ -103,7 +109,12 @@ public class HttpClient {
         String domain = api.getString("domain");
         String path = api.getString("path");
 
-        log.info("Query Trades API domain: " + domain +", path: "+ path);
+        StringJoiner joiner = new StringJoiner(", ");
+        for (Map.Entry<String, String> entry : parameters.entrySet()) {
+            joiner.add("\"" + entry.getKey() + "\"" + ": " + "\"" + entry.getValue() + "\"");
+        }
+
+        log.info("Query Trades API domain: " + domain + ", path: " + path + ", parameters: {" + joiner + "}");
         getResponse(vertx, domain, path, 80, "get", null, parameters, null)
                 .onFailure(promise::fail)
                 .onSuccess(res -> {
