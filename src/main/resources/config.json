@@ -2,13 +2,14 @@
   "api": [
     {
       "name": "getCandleStick",
-      "method": "get",
-      "domain": "api.crypto.com",
+      "method": "GET",
+      "domain": "uat-api.3ona.co",
       "path": "/v2/public/get-candlestick",
       "parameter": [
         {
           "name": "instrument_name",
           "value": [
+            "LUNA_USDT",
             "ETH_CRO",
             "BTC_USDT"
           ]
@@ -34,22 +35,14 @@
     },
     {
       "name": "getTrades",
-      "method": "get",
-      "domain": "api.crypto.com",
+      "method": "GET",
+      "domain": "uat-api.3ona.co",
       "path": "/v2/public/get-trades",
       "parameter": [
         {
           "name": "instrument_name",
           "value": [
-            "ICX_CRO",
-            "VET_USDT",
-            "XTZ_CRO",
-            "XTZ_USDT",
-            "EOS_USDT",
-            "ETH_USDT",
-            "BCH_USDT",
-            "USDC_USDT",
-            "ATOM_USDT",
+            "LUNA_USDT",
             "ETH_CRO",
             "BTC_USDT"
           ]
