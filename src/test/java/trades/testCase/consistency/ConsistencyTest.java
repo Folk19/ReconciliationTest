@@ -11,6 +11,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import trades.util.HttpClient;
 
 import java.io.IOException;
+import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.Period;
@@ -80,7 +81,6 @@ public class ConsistencyTest {
     }
 
     private boolean consistencyChecker(String instrument, String period, JsonArray candles, JsonArray trades) {
-
         log.info("Run consistency Checker: " + instrument + "(" + period + ")");
 
         boolean isPass = true;
@@ -100,18 +100,18 @@ public class ConsistencyTest {
         List<JsonObject> tradesList = new ArrayList<>();
         for (int i = 0; i < trades.size(); i++) tradesList.add(trades.getJsonObject(i));
         tradesList.sort((a, b) -> {
-            Long tA = a.getLong("t");
-            Long tB = b.getLong("t");
+            Long tA = a.getLong("d");
+            Long tB = b.getLong("d");
             return tA.compareTo(tB);
         });
 
         JsonObject candle;
         long begin, end, timestamp;
-        Double candleOpen, candleClose, candleHigh, candleLow, candleVolume;
-        Double tradeOpen, tradeClose, tradeHigh, tradeLow, tradeVolume;
-        Double tradePrice, tradeQuantity;
+        BigDecimal candleOpen, candleClose, candleHigh, candleLow, candleVolume;
+        BigDecimal tradeOpen, tradeClose, tradeHigh, tradeLow, tradeVolume;
+        BigDecimal tradePrice, tradeQuantity;
         boolean isCandlePass;
-        String logInfo;
+        String caseName;
         for (Object cObj : candles) {
             // get candle info
             candle = (JsonObject) cObj;
@@ -119,69 +119,62 @@ public class ConsistencyTest {
             // get period
             begin = candle.getLong("t");
             end = begin + periodMillis;
-            logInfo = "Case (" + begin + "-" + end + ")";
+            caseName = "Case (" + begin + "-" + end + ")";
 
             //get other info
-            candleOpen = candle.getDouble("o");
-            candleClose = candle.getDouble("c");
-            candleHigh = candle.getDouble("h");
-            candleLow = candle.getDouble("l");
-            candleVolume = candle.getDouble("v");
+            candleOpen = BigDecimal.valueOf(candle.getDouble("o"));
+            candleClose = BigDecimal.valueOf(candle.getDouble("c"));
+            candleHigh = BigDecimal.valueOf(candle.getDouble("h"));
+            candleLow = BigDecimal.valueOf(candle.getDouble("l"));
+            candleVolume = BigDecimal.valueOf(candle.getDouble("v"));
 
             isCandlePass = true;
 
             // init O,C,H,L for this period
             tradeOpen = null;
             tradeClose = null;
-            tradeHigh = Double.MIN_VALUE;
-            tradeLow = Double.MAX_VALUE;
-            tradeVolume = 0.0;
+            tradeHigh = BigDecimal.valueOf(Double.MIN_VALUE);
+            tradeLow = BigDecimal.valueOf(Double.MAX_VALUE);
+            tradeVolume = new BigDecimal(0);
 
             // iterator to get the trade between in the time period
             for (JsonObject trade : tradesList) {
                 timestamp = trade.getLong("t");
-                tradePrice = trade.getDouble("p");
-                tradeQuantity = trade.getDouble("q");
+                tradePrice = BigDecimal.valueOf(trade.getDouble("p"));
+                tradeQuantity = BigDecimal.valueOf(trade.getDouble("q"));
 
                 if (timestamp > begin && timestamp <= end) {
                     // this trade is in the period, set O,C,H,L
                     if (Objects.isNull(tradeOpen)) tradeOpen = tradePrice;
                     tradeClose = tradePrice;
-                    tradeHigh = Math.max(tradeHigh, tradePrice);
-                    tradeLow = Math.min(tradeLow, tradePrice);
-                    tradeVolume += tradeQuantity;
+                    tradeHigh = tradeHigh.max(tradePrice);
+                    tradeLow = tradeLow.min(tradePrice);
+                    tradeVolume = tradeVolume.add(tradeQuantity);
                 }
             }
 
             // Verify O,C,H,L,V with candle data
-            if (!tradeVolume.equals(candleVolume)) {
-                log.error(logInfo + ": volume doesn't match: " + tradeVolume + " (expected: " + candleVolume + ")");
+            if (tradeVolume.compareTo(candleVolume) != 0) {
+                log.error(caseName + ": volume doesn't match: " + tradeVolume + " (expected: " + candleVolume + ")");
                 isCandlePass = false;
             } else {
                 StringJoiner misMatch = new StringJoiner(", ");
-                if (!Objects.equals(tradeOpen, candleOpen)) {
+                if (Objects.nonNull(tradeOpen) && tradeOpen.compareTo(candleOpen) != 0)
                     misMatch.add("open doesn't match: " + tradeOpen + " (expected: " + candleOpen + ")");
-                    isCandlePass = false;
-                }
-                if (!Objects.equals(tradeClose, candleClose)) {
+                if (Objects.nonNull(tradeClose) && tradeClose.compareTo(candleClose) != 0)
                     misMatch.add("close doesn't match: " + tradeClose + " (expected: " + candleClose + ")");
-                    isCandlePass = false;
-                }
-                if (!tradeHigh.equals(candleHigh)) {
+                if (tradeHigh.compareTo(candleHigh) != 0)
                     misMatch.add("high doesn't match: " + tradeHigh + " (expected: " + candleHigh + ")");
-                    isCandlePass = false;
-                }
-                if (!tradeLow.equals(candleLow)) {
+                if (tradeLow.compareTo(candleLow) != 0)
                     misMatch.add("low doesn't match: " + tradeLow + " (expected: " + candleLow + ")");
-                    isCandlePass = false;
-                }
                 if (misMatch.length() > 0) {
-                    log.error(logInfo + ": " + misMatch);
+                    log.error(caseName + ": " + misMatch);
+                    isCandlePass = false;
                 }
             }
 
             if (isCandlePass) {
-                log.info(logInfo + ": PASS");
+                log.info(caseName + ": PASS");
             } else {
                 isPass = false;
             }
@@ -203,7 +196,7 @@ public class ConsistencyTest {
         Promise<Void> tradeFuture = Promise.promise();
         Map<Long, JsonObject> tradesMap = new HashMap<>(); //store trade data in map to avoid duplication
         AtomicInteger counter = new AtomicInteger(0);
-        long rounds = Math.min(parse(period) / 2000, 3);
+        long rounds = Math.min(parse(period) / 2000, 10);
 
         //set timer, run every 1 sec, call trade api
         vertx.setPeriodic(2000, timeID ->
